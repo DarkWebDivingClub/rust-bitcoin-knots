@@ -811,11 +811,21 @@ mod tests {
         let real_decode = decode.unwrap();
         assert_eq!(real_decode.header.version, Version(2147483647));
 
+        // Bit 31 of nVersion. Upstream reads this as an ordinary negative
+        // version; with `blake2b` enabled it flags a version 2 header, so
+        // the same 80 bytes are a truncated v2 header and must not decode.
+        // This mirrors Knots, whose deserializer sets m_header_v2 from that
+        // bit unconditionally.
         let block2 = hex!("000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
         let decode2: Result<Block, _> = deserialize(&block2);
-        assert!(decode2.is_ok());
-        let real_decode2 = decode2.unwrap();
-        assert_eq!(real_decode2.header.version, Version(-2147483648));
+        #[cfg(not(feature = "blake2b"))]
+        {
+            assert!(decode2.is_ok());
+            let real_decode2 = decode2.unwrap();
+            assert_eq!(real_decode2.header.version, Version(-2147483648));
+        }
+        #[cfg(feature = "blake2b")]
+        assert!(decode2.is_err(), "bit 31 flags a v2 header, which needs 84 more bytes");
     }
 
     #[test]
