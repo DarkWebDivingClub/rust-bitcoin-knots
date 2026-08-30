@@ -50,6 +50,23 @@ fn serde_regression_block() {
     let block: Block = deserialize(segwit).unwrap();
     let got = serialize(&block).unwrap();
     let want = include_bytes!("data/serde/block_bincode");
+
+    // With version 2 headers compiled in, `Header` carries one more field and
+    // its serde form gains the `Option` discriminant for it: a single zero
+    // byte, at the end of the header. Rather than keep a second fixture,
+    // splice that byte into the recorded one — which also asserts that
+    // nothing else about the encoding moved.
+    //
+    // The header ends at 96 bytes here, not 80: bincode length-prefixes each
+    // of the two hashes with a u64.
+    #[cfg(feature = "blake2b")]
+    let want = {
+        const HEADER_END: usize = 96;
+        let mut want = want.to_vec();
+        want.insert(HEADER_END, 0);
+        want
+    };
+
     assert_eq!(got, want)
 }
 

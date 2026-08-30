@@ -103,6 +103,8 @@ pub const USE_TIME_OFFSET: u8 = 4;
 /// proof-of-work hash.
 #[cfg(feature = "blake2b")]
 #[derive(Copy, PartialEq, Eq, Clone, PartialOrd, Ord, Hash, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(crate = "actual_serde"))]
 pub struct HeaderV2 {
     /// Second nonce, beyond [`Header::nonce`].
     pub nonce2: u32,
