@@ -70,17 +70,226 @@ pub struct Header {
     pub bits: CompactTarget,
     /// The nonce, selected to obtain a low enough blockhash.
     pub nonce: u32,
+    /// Fields carried only by a version 2 (BLAKE2b) header.
+    ///
+    /// `None` for the historical 80-byte header. See [`HeaderV2`].
+    #[cfg(feature = "blake2b")]
+    pub v2: Option<HeaderV2>,
 }
 
+#[cfg(not(feature = "blake2b"))]
 impl_consensus_encoding!(Header, version, prev_blockhash, merkle_root, time, bits, nonce);
 
+/// Bit 31 of the serialized `nVersion`, flagging a version 2 header.
+///
+/// This is not part of the version number. It is applied when serializing
+/// and masked off the stored [`Header::version`], so `version` means the
+/// same thing for both formats.
+#[cfg(feature = "blake2b")]
+pub const VERSION_HEADER_V2_FLAG: u32 = 0x8000_0000;
+
+/// Bit in [`HeaderV2::flags`] selecting the time-offset encoding.
+///
+/// When set, the serialized time is `time - time_offset` rather than
+/// `time`.
+#[cfg(feature = "blake2b")]
+pub const USE_TIME_OFFSET: u8 = 4;
+
+/// The fields a version 2 (BLAKE2b) block header carries beyond the
+/// historical six.
+///
+/// A v2 header is 164 bytes: the classic 80-byte prefix followed by these,
+/// in declaration order. See `blake2b_pow.md` for how they feed the
+/// proof-of-work hash.
+#[cfg(feature = "blake2b")]
+#[derive(Copy, PartialEq, Eq, Clone, PartialOrd, Ord, Hash, Debug)]
+pub struct HeaderV2 {
+    /// Second nonce, beyond [`Header::nonce`].
+    pub nonce2: u32,
+    /// Third nonce.
+    pub nonce3: u32,
+    /// Stratum v1 extranonce.
+    pub extranonce: [u8; 16],
+    /// Offset subtracted from `time` on the wire when [`USE_TIME_OFFSET`]
+    /// is set in `flags`.
+    pub time_offset: u32,
+    /// Number of transactions in the block.
+    pub txcount: u16,
+    /// Header flags. The low two bits select the ASIC profile used by the
+    /// proof-of-work hash; bit 2 is [`USE_TIME_OFFSET`].
+    pub flags: u8,
+    /// How many leading bits of the XOR mask are cleared.
+    pub xor_key_mask_clear_bits: u8,
+    /// Key withheld from the pooling miner, which is given only its hash.
+    pub xor_key: [u8; 16],
+    /// The block's own height.
+    pub height: i32,
+    /// Merge-mining commitment.
+    pub mm_rhs: [u8; 32],
+}
+
+#[cfg(feature = "blake2b")]
+impl HeaderV2 {
+    /// Serialized length of the v2-only fields.
+    pub const SIZE: usize = 4 + 4 + 16 + 4 + 2 + 1 + 1 + 16 + 4 + 32; // 84
+
+    /// The ASIC profile this header's proof of work uses.
+    pub fn asic_profile(&self) -> u8 { self.flags & 3 }
+}
+
+#[cfg(feature = "blake2b")]
+impl Encodable for HeaderV2 {
+    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
+        let mut len = 0;
+        len += self.nonce2.consensus_encode(w)?;
+        len += self.nonce3.consensus_encode(w)?;
+        w.write_all(&self.extranonce)?;
+        len += self.extranonce.len();
+        len += self.time_offset.consensus_encode(w)?;
+        len += self.txcount.consensus_encode(w)?;
+        len += self.flags.consensus_encode(w)?;
+        len += self.xor_key_mask_clear_bits.consensus_encode(w)?;
+        w.write_all(&self.xor_key)?;
+        len += self.xor_key.len();
+        len += self.height.consensus_encode(w)?;
+        w.write_all(&self.mm_rhs)?;
+        len += self.mm_rhs.len();
+        Ok(len)
+    }
+}
+
+#[cfg(feature = "blake2b")]
+impl Decodable for HeaderV2 {
+    fn consensus_decode_from_finite_reader<R: Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, encode::Error> {
+        let nonce2 = Decodable::consensus_decode_from_finite_reader(r)?;
+        let nonce3 = Decodable::consensus_decode_from_finite_reader(r)?;
+        let mut extranonce = [0u8; 16];
+        r.read_exact(&mut extranonce)?;
+        let time_offset = Decodable::consensus_decode_from_finite_reader(r)?;
+        let txcount = Decodable::consensus_decode_from_finite_reader(r)?;
+        let flags = Decodable::consensus_decode_from_finite_reader(r)?;
+        let xor_key_mask_clear_bits = Decodable::consensus_decode_from_finite_reader(r)?;
+        let mut xor_key = [0u8; 16];
+        r.read_exact(&mut xor_key)?;
+        let height = Decodable::consensus_decode_from_finite_reader(r)?;
+        let mut mm_rhs = [0u8; 32];
+        r.read_exact(&mut mm_rhs)?;
+        Ok(HeaderV2 {
+            nonce2,
+            nonce3,
+            extranonce,
+            time_offset,
+            txcount,
+            flags,
+            xor_key_mask_clear_bits,
+            xor_key,
+            height,
+            mm_rhs,
+        })
+    }
+}
+
+#[cfg(feature = "blake2b")]
+impl Encodable for Header {
+    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
+        let mut len = 0;
+        len += self.version_on_wire().consensus_encode(w)?;
+        len += self.prev_blockhash.consensus_encode(w)?;
+        len += self.merkle_root.consensus_encode(w)?;
+        len += self.time_on_wire().consensus_encode(w)?;
+        len += self.bits.consensus_encode(w)?;
+        len += self.nonce.consensus_encode(w)?;
+        if let Some(v2) = self.v2.as_ref() {
+            len += v2.consensus_encode(w)?;
+        }
+        Ok(len)
+    }
+}
+
+#[cfg(feature = "blake2b")]
+impl Decodable for Header {
+    fn consensus_decode_from_finite_reader<R: Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, encode::Error> {
+        let wire_version: u32 = Decodable::consensus_decode_from_finite_reader(r)?;
+        let is_v2 = wire_version & VERSION_HEADER_V2_FLAG != 0;
+        // The flag is not part of the version number; strip it so `version`
+        // means the same for both formats.
+        let version =
+            Version::from_consensus((wire_version & !VERSION_HEADER_V2_FLAG) as i32);
+        let prev_blockhash = Decodable::consensus_decode_from_finite_reader(r)?;
+        let merkle_root = Decodable::consensus_decode_from_finite_reader(r)?;
+        let time_on_wire: u32 = Decodable::consensus_decode_from_finite_reader(r)?;
+        let bits = Decodable::consensus_decode_from_finite_reader(r)?;
+        let nonce = Decodable::consensus_decode_from_finite_reader(r)?;
+
+        let v2 = if is_v2 {
+            Some(HeaderV2::consensus_decode_from_finite_reader(r)?)
+        } else {
+            None
+        };
+
+        // The time correction can only be applied once the flags and offset
+        // have been read, so it happens after the v2 fields, not inline.
+        let time = match v2.as_ref() {
+            Some(v2) if v2.flags & USE_TIME_OFFSET != 0 =>
+                time_on_wire.wrapping_add(v2.time_offset),
+            _ => time_on_wire,
+        };
+
+        Ok(Header { version, prev_blockhash, merkle_root, time, bits, nonce, v2 })
+    }
+}
+
 impl Header {
-    /// The number of bytes that the block header contributes to the size of a block.
+    /// The number of bytes a version 1 block header contributes to the size
+    /// of a block.
+    ///
+    /// A version 2 (BLAKE2b) header is longer; use [`Header::size`] for a
+    /// value that is correct for both.
     // Serialized length of fields (version, prev_blockhash, merkle_root, time, bits, nonce)
     pub const SIZE: usize = 4 + 32 + 32 + 4 + 4 + 4; // 80
 
+    /// The serialized length of this header.
+    pub fn size(&self) -> usize {
+        #[cfg(feature = "blake2b")]
+        if self.v2.is_some() {
+            return Self::SIZE + HeaderV2::SIZE;
+        }
+        Self::SIZE
+    }
+
+    /// The version as serialized, including the v2 flag in bit 31.
+    #[cfg(feature = "blake2b")]
+    pub fn version_on_wire(&self) -> u32 {
+        let v = self.version.to_consensus() as u32 & !VERSION_HEADER_V2_FLAG;
+        if self.v2.is_some() { v | VERSION_HEADER_V2_FLAG } else { v }
+    }
+
+    /// The time as serialized, which for a v2 header may carry an offset.
+    #[cfg(feature = "blake2b")]
+    pub fn time_on_wire(&self) -> u32 {
+        match self.v2.as_ref() {
+            Some(v2) if v2.flags & USE_TIME_OFFSET != 0 =>
+                self.time.wrapping_sub(v2.time_offset),
+            _ => self.time,
+        }
+    }
+
     /// Returns the block hash.
+    ///
+    /// For a version 2 header this is the BLAKE2b construction, not
+    /// `SHA256d` — see [`crate::blockdata::blake2b_pow`]. Consumers that
+    /// treat this as block identity therefore need no changes to work on a
+    /// chain that has activated the new proof of work.
     pub fn block_hash(&self) -> BlockHash {
+        #[cfg(feature = "blake2b")]
+        if let Some(v2) = self.v2.as_ref() {
+            let components = crate::blockdata::blake2b_pow::components(self, v2);
+            return BlockHash::from_byte_array(components.block_hash);
+        }
         let mut engine = BlockHash::engine();
         self.consensus_encode(&mut engine).expect("engines don't error");
         BlockHash::from_engine(engine)
@@ -334,7 +543,7 @@ impl Block {
     /// > Base size is the block size in bytes with the original transaction serialization without
     /// > any witness-related data, as seen by a non-upgraded node.
     fn base_size(&self) -> usize {
-        let mut size = Header::SIZE;
+        let mut size = self.header.size();
 
         size += VarInt::from(self.txdata.len()).size();
         size += self.txdata.iter().map(|tx| tx.base_size()).sum::<usize>();
@@ -347,7 +556,7 @@ impl Block {
     /// > Total size is the block size in bytes with transactions serialized as described in BIP144,
     /// > including base data and witness data.
     pub fn total_size(&self) -> usize {
-        let mut size = Header::SIZE;
+        let mut size = self.header.size();
 
         size += VarInt::from(self.txdata.len()).size();
         size += self.txdata.iter().map(|tx| tx.total_size()).sum::<usize>();

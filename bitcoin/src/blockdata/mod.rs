@@ -7,6 +7,8 @@
 //!
 
 pub mod block;
+#[cfg(feature = "blake2b")]
+pub mod blake2b_pow;
 pub mod constants;
 pub mod locktime;
 pub mod opcodes;
