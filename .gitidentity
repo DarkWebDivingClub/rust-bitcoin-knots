@@ -1,0 +1,18 @@
+# The identity this repository is signed with.
+#
+# Not read automatically: git ignores tracked config files, deliberately, so a
+# cloned repository cannot impose a signing key on you. Opt in once per clone:
+#
+#     git config include.path ../.gitidentity
+#
+# With user.useConfigOnly = true set globally, forgetting that step makes
+# commits fail rather than silently signing with the wrong key.
+
+[user]
+	name = Rene Malmgren
+	email = duke_h3@dwdc.club
+	signingkey = B46741EF74DCF46BD42783BC4CC863FD110A9568
+[commit]
+	gpgsign = true
+[gpg]
+	format = openpgp
