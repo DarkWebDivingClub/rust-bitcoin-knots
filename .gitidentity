@@ -11,7 +11,7 @@
 [user]
 	name = Rene Malmgren
 	email = duke_h3@dwdc.club
-	signingkey = B46741EF74DCF46BD42783BC4CC863FD110A9568
+	signingkey = 8798B917323E3E4BA7145EFFBC93B62DEDAC03FD
 [commit]
 	gpgsign = true
 [gpg]
